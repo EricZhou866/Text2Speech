@@ -1,13 +1,34 @@
 from flask import Flask, request, send_file, render_template
 from flask_cors import CORS
-from gtts import gTTS
+import asyncio
+import edge_tts
 import os
 import re
 import uuid
 import subprocess
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
+
+# Voice configurations
+VOICES = {
+    'male': {
+        'en': 'en-US-ChristopherNeural',  # Male voice for English
+        'zh': 'zh-CN-YunxiNeural'  # Male voice for Chinese
+    },
+    'female': {
+        'en': 'en-US-JennyNeural',  # Female voice for English
+        'zh': 'zh-CN-XiaoxiaoNeural'  # Female voice for Chinese
+    }
+}
 
 
 def split_text(text):
@@ -15,19 +36,17 @@ def split_text(text):
     Split mixed text into Chinese and English segments
     Returns a list of tuples (text, is_chinese)
     """
-    # Use regex to split text
     pattern = r'([\u4e00-\u9fff]+|[a-zA-Z0-9\s]+)'
     segments = re.findall(pattern, text)
 
-    # Clean and mark each segment
     result = []
     for segment in segments:
         segment = segment.strip()
         if not segment:
             continue
-        # Check if segment is Chinese
         is_chinese = bool(re.search(r'[\u4e00-\u9fff]', segment))
         result.append((segment, is_chinese))
+        logger.debug(f"Split segment: '{segment}' (Chinese: {is_chinese})")
 
     return result
 
@@ -36,8 +55,53 @@ def merge_audio_files(input_files, output_file):
     """
     Merge audio files using sox command line tool
     """
-    cmd = ['sox'] + input_files + [output_file]
-    subprocess.run(cmd, check=True)
+    try:
+        cmd = ['sox'] + input_files + [output_file]
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        logger.info(f"Successfully merged {len(input_files)} audio files")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error merging audio files: {e.stderr}")
+        raise
+
+
+async def generate_speech(text, voice, output_file):
+    """
+    Generate speech using edge-tts
+    Args:
+        text (str): Text to convert to speech
+        voice (str): Voice ID to use
+        output_file (str): Path to save the audio file
+    """
+    try:
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(output_file)
+        logger.info(f"Generated speech for text: '{text[:50]}...' using voice: {voice}")
+    except Exception as e:
+        logger.error(f"Error generating speech: {str(e)}")
+        raise
+
+
+def cleanup_files(temp_dir, output_file):
+    """
+    Clean up temporary files and directories
+    """
+    try:
+        if os.path.exists(output_file):
+            os.remove(output_file)
+            logger.debug(f"Removed output file: {output_file}")
+
+        if os.path.exists(temp_dir):
+            for file in os.listdir(temp_dir):
+                try:
+                    file_path = os.path.join(temp_dir, file)
+                    os.remove(file_path)
+                    logger.debug(f"Removed temp file: {file_path}")
+                except Exception as e:
+                    logger.error(f"Error removing temp file {file}: {str(e)}")
+            os.rmdir(temp_dir)
+            logger.debug(f"Removed temp directory: {temp_dir}")
+    except Exception as e:
+        logger.error(f"Error in cleanup: {str(e)}")
 
 
 @app.route('/')
@@ -47,6 +111,9 @@ def home():
 
 @app.route('/tts', methods=['POST'])
 def text_to_speech():
+    temp_dir = 'temp_audio'
+    output_file = None
+
     try:
         # Validate input
         data = request.get_json()
@@ -54,12 +121,15 @@ def text_to_speech():
             return {'error': 'No text provided'}, 400
 
         text = data.get('text', '')
-        print(f'Converting text: {text}')
+        voice_gender = data.get('voice', 'male')  # 'male' or 'female'
+
+        if voice_gender not in VOICES:
+            return {'error': 'Invalid voice type'}, 400
+
+        logger.info(f'Converting text with {voice_gender} voice')
 
         # Create temporary directory
-        temp_dir = 'temp_audio'
-        if not os.path.exists(temp_dir):
-            os.makedirs(temp_dir)
+        os.makedirs(temp_dir, exist_ok=True)
 
         # Generate unique session ID
         session_id = str(uuid.uuid4())
@@ -67,6 +137,8 @@ def text_to_speech():
 
         # Split text into segments
         segments = split_text(text)
+        if not segments:
+            return {'error': 'No valid text segments'}, 400
 
         # Store temporary file paths
         temp_files = []
@@ -75,56 +147,28 @@ def text_to_speech():
         for i, (segment, is_chinese) in enumerate(segments):
             temp_file = f'{temp_dir}/segment_{i}_{session_id}.mp3'
 
-            # Generate speech for each segment
-            if is_chinese:
-                # Chinese text
-                tts = gTTS(text=segment, lang='zh-cn')
-            else:
-                # English text (US accent)
-                tts = gTTS(text=segment, lang='en', tld='com')
+            # Select appropriate voice
+            lang = 'zh' if is_chinese else 'en'
+            voice = VOICES[voice_gender][lang]
 
-            tts.save(temp_file)
+            # Generate speech for segment
+            asyncio.run(generate_speech(segment, voice, temp_file))
             temp_files.append(temp_file)
 
-        # Process audio files
+        # Merge audio files
         if temp_files:
-            # Merge all segments into final output
             merge_audio_files(temp_files, output_file)
-
-            # Clean up temporary segment files
-            for temp_file in temp_files:
-                try:
-                    os.remove(temp_file)
-                except Exception as e:
-                    print(f'Error removing temporary file {temp_file}: {str(e)}')
-
             return send_file(output_file, as_attachment=True)
-        else:
-            return {'error': 'No valid text segments'}, 400
+
+        return {'error': 'No audio generated'}, 500
 
     except Exception as e:
-        print(f'Error: {str(e)}')
+        logger.error(f"Error in text_to_speech: {str(e)}", exc_info=True)
         return {'error': str(e)}, 500
 
     finally:
-        # Clean up all temporary files
-        try:
-            # Remove output file
-            if os.path.exists(output_file):
-                os.remove(output_file)
-
-            # Clean up temporary directory
-            if os.path.exists(temp_dir):
-                for file in os.listdir(temp_dir):
-                    try:
-                        os.remove(os.path.join(temp_dir, file))
-                    except Exception as e:
-                        print(f'Error cleaning up temp file: {str(e)}')
-                os.rmdir(temp_dir)
-        except Exception as e:
-            print(f'Error in cleanup: {str(e)}')
+        cleanup_files(temp_dir, output_file)
 
 
 if __name__ == '__main__':
-    # Run the server
     app.run(host='0.0.0.0', port=5001, debug=True)

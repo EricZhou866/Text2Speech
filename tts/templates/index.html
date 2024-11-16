@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Text-to-Speech Converter</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
@@ -48,12 +49,8 @@
         }
 
         @keyframes wave {
-            0%, 100% {
-                transform: scaleX(1);
-            }
-            50% {
-                transform: scaleX(1.1);
-            }
+            0%, 100% { transform: scaleX(1); }
+            50% { transform: scaleX(1.1); }
         }
 
         h1 {
@@ -82,6 +79,67 @@
             outline: none;
             border-color: #4CAF50;
             box-shadow: 0 0 0 2px rgba(76,175,80,0.2);
+        }
+
+        .voice-selector {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .voice-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: background-color 0.3s ease;
+        }
+
+        .voice-option:hover {
+            background-color: #e9ecef;
+        }
+
+        .voice-option input[type="radio"] {
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #4CAF50;
+            border-radius: 50%;
+            margin: 0;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .voice-option input[type="radio"]:checked::before {
+            content: '';
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background-color: #4CAF50;
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        .voice-option label {
+            font-size: 16px;
+            color: #333;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .voice-option i {
+            font-size: 18px;
+            color: #4CAF50;
         }
 
         .action-buttons {
@@ -146,6 +204,9 @@
             gap: 15px;
             margin: 20px 0;
             display: none;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
         }
 
         .audio-container audio {
@@ -184,6 +245,12 @@
                 width: 100%;
             }
 
+            .voice-selector {
+                flex-direction: column;
+                align-items: center;
+                gap: 10px;
+            }
+
             .logo-container {
                 flex-direction: column;
             }
@@ -194,16 +261,11 @@
     <div class="container">
         <div class="logo-container">
             <svg class="logo" width="50" height="50" viewBox="0 0 100 100">
-                <!-- Background Circle -->
                 <circle cx="50" cy="50" r="45" fill="#4CAF50"/>
-
-                <!-- Microphone -->
                 <rect x="40" y="25" width="20" height="30" rx="10" fill="white"/>
                 <path d="M30 45 Q50 45 70 45" stroke="white" stroke-width="4" fill="none"/>
                 <rect x="48" y="55" width="4" height="15" fill="white"/>
                 <rect x="40" y="70" width="20" height="4" rx="2" fill="white"/>
-
-                <!-- Sound Waves -->
                 <g class="sound-waves">
                     <path d="M25 35 Q30 50 25 65" stroke="white" stroke-width="3" fill="none" opacity="0.3">
                         <animate attributeName="opacity" values="0.3;1;0.3" dur="2s" repeatCount="indefinite"/>
@@ -227,17 +289,28 @@
             placeholder="Enter your text here (supports English and Chinese)&#10;&#10;Example:&#10;Hello World! 你好世界！"
         ></textarea>
 
+        <div class="voice-selector">
+            <div class="voice-option">
+                <input type="radio" id="male-voice" name="voice" value="male" checked>
+                <label for="male-voice">
+                    <i class="fas fa-male"></i>
+                    Male Voice
+                </label>
+            </div>
+            <div class="voice-option">
+                <input type="radio" id="female-voice" name="voice" value="female">
+                <label for="female-voice">
+                    <i class="fas fa-female"></i>
+                    Female Voice
+                </label>
+            </div>
+        </div>
+
         <div class="action-buttons">
-            <button
-                id="clear-btn"
-                class="clear-btn"
-                onclick="clearText()">
+            <button id="clear-btn" class="clear-btn" onclick="clearText()">
                 Clear Text
             </button>
-            <button
-                id="convert-btn"
-                class="convert-btn"
-                onclick="convertToSpeech()">
+            <button id="convert-btn" class="convert-btn" onclick="convertToSpeech()">
                 Convert to Speech
             </button>
         </div>
@@ -248,10 +321,7 @@
             <audio id="audio-player" controls>
                 Your browser does not support the audio element.
             </audio>
-            <button
-                id="download-btn"
-                class="download-btn"
-                onclick="downloadMP3()">
+            <button id="download-btn" class="download-btn" onclick="downloadMP3()">
                 Download MP3
             </button>
         </div>
@@ -259,6 +329,10 @@
 
     <script>
         let audioBlob = null;
+
+        function getSelectedVoice() {
+            return document.querySelector('input[name="voice"]:checked').value;
+        }
 
         function animateLogo(isPlaying) {
             const logo = document.querySelector('.logo');
@@ -278,6 +352,7 @@
 
         async function convertToSpeech() {
             const textInput = document.getElementById("text-input").value;
+            const voiceType = getSelectedVoice();
             const convertBtn = document.getElementById("convert-btn");
             const clearBtn = document.getElementById("clear-btn");
             const audioContainer = document.getElementById("audio-container");
@@ -300,7 +375,10 @@
                 const response = await fetch('/tts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: textInput })
+                    body: JSON.stringify({
+                        text: textInput,
+                        voice: voiceType
+                    })
                 });
 
                 if (!response.ok) {
