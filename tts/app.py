@@ -7,6 +7,7 @@ import re
 import uuid
 import subprocess
 import logging
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -17,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
+
+# Define base temp directory
+BASE_TEMP_DIR = Path("/home/rslsync/vps/pd/Text2Speech/tts/temp")
 
 # Voice configurations
 VOICES = {
@@ -30,7 +34,6 @@ VOICES = {
     }
 }
 
-
 def split_text(text):
     """
     Split mixed text into Chinese and English segments
@@ -38,7 +41,7 @@ def split_text(text):
     """
     pattern = r'([\u4e00-\u9fff]+|[a-zA-Z0-9\s]+)'
     segments = re.findall(pattern, text)
-
+    
     result = []
     for segment in segments:
         segment = segment.strip()
@@ -47,44 +50,33 @@ def split_text(text):
         is_chinese = bool(re.search(r'[\u4e00-\u9fff]', segment))
         result.append((segment, is_chinese))
         logger.debug(f"Split segment: '{segment}' (Chinese: {is_chinese})")
-
+    
     return result
 
+def get_temp_dir():
+    """Create a unique temporary directory"""
+    temp_dir = BASE_TEMP_DIR / str(uuid.uuid4())
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return temp_dir
 
 def merge_audio_files(input_files, output_file):
     """
-    Merge audio files using FFmpeg
+    Merge audio files using pure Python
     """
     try:
         if not input_files:
             raise ValueError("No input files provided")
 
-        # Create a file list for FFmpeg
-        list_file = 'files.txt'
-        with open(list_file, 'w') as f:
+        with open(output_file, 'wb') as outfile:
             for file in input_files:
-                f.write(f"file '{file}'\n")
-
-        # Merge files using FFmpeg
-        cmd = [
-            'ffmpeg',
-            '-f', 'concat',
-            '-safe', '0',
-            '-i', list_file,
-            '-c', 'copy',
-            output_file
-        ]
-
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+                with open(file, 'rb') as infile:
+                    outfile.write(infile.read())
+                    
         logger.info(f"Successfully merged {len(input_files)} audio files")
-
-        # Clean up the list file
-        os.remove(list_file)
-
+        
     except Exception as e:
         logger.error(f"Error merging audio files: {str(e)}")
         raise
-
 
 async def generate_speech(text, voice, output_file):
     """
@@ -98,41 +90,33 @@ async def generate_speech(text, voice, output_file):
         logger.error(f"Error generating speech: {str(e)}")
         raise
 
-
-def cleanup_files(temp_dir, output_file):
-    """
-    Clean up temporary files and directories
-    """
+def cleanup_directory(directory):
+    """Clean up a directory and its contents"""
     try:
-        if os.path.exists(output_file):
-            os.remove(output_file)
-            logger.debug(f"Removed output file: {output_file}")
-
-        if os.path.exists(temp_dir):
-            for file in os.listdir(temp_dir):
+        if directory.exists():
+            for file in directory.glob('*'):
                 try:
-                    file_path = os.path.join(temp_dir, file)
-                    os.remove(file_path)
-                    logger.debug(f"Removed temp file: {file_path}")
+                    file.unlink()
                 except Exception as e:
-                    logger.error(f"Error removing temp file {file}: {str(e)}")
-            os.rmdir(temp_dir)
-            logger.debug(f"Removed temp directory: {temp_dir}")
+                    logger.error(f"Error removing file {file}: {str(e)}")
+            directory.rmdir()
+            logger.debug(f"Cleaned up directory: {directory}")
     except Exception as e:
         logger.error(f"Error in cleanup: {str(e)}")
-
 
 @app.route('/')
 def home():
     return render_template('index.html')
 
-
 @app.route('/tts', methods=['POST'])
 def text_to_speech():
-    temp_dir = 'temp_audio'
+    work_dir = None
     output_file = None
-
+    
     try:
+        # Create working directory
+        work_dir = get_temp_dir()
+        
         # Validate input
         data = request.get_json()
         if not data or 'text' not in data:
@@ -140,18 +124,15 @@ def text_to_speech():
 
         text = data.get('text', '')
         voice_gender = data.get('voice', 'male')
-
+        
         if voice_gender not in VOICES:
             return {'error': 'Invalid voice type'}, 400
 
         logger.info(f'Converting text with {voice_gender} voice')
 
-        # Create temporary directory
-        os.makedirs(temp_dir, exist_ok=True)
-
         # Generate unique session ID
         session_id = str(uuid.uuid4())
-        output_file = f'speech_{session_id}.mp3'
+        output_file = work_dir / f'speech_{session_id}.mp3'
 
         # Split text into segments
         segments = split_text(text)
@@ -163,21 +144,21 @@ def text_to_speech():
 
         # Convert each segment
         for i, (segment, is_chinese) in enumerate(segments):
-            temp_file = f'{temp_dir}/segment_{i}_{session_id}.mp3'
-
+            temp_file = work_dir / f'segment_{i}_{session_id}.mp3'
+            
             # Select appropriate voice
             lang = 'zh' if is_chinese else 'en'
             voice = VOICES[voice_gender][lang]
-
+            
             # Generate speech for segment
-            asyncio.run(generate_speech(segment, voice, temp_file))
-            temp_files.append(temp_file)
+            asyncio.run(generate_speech(segment, voice, str(temp_file)))
+            temp_files.append(str(temp_file))
 
         # Merge audio files
         if temp_files:
-            merge_audio_files(temp_files, output_file)
-            return send_file(output_file, as_attachment=True)
-
+            merge_audio_files(temp_files, str(output_file))
+            return send_file(str(output_file), as_attachment=True)
+        
         return {'error': 'No audio generated'}, 500
 
     except Exception as e:
@@ -185,8 +166,10 @@ def text_to_speech():
         return {'error': str(e)}, 500
 
     finally:
-        cleanup_files(temp_dir, output_file)
-
+        if work_dir:
+            cleanup_directory(work_dir)
 
 if __name__ == '__main__':
+    # Ensure base temp directory exists
+    BASE_TEMP_DIR.mkdir(parents=True, exist_ok=True)
     app.run(host='0.0.0.0', port=5001, debug=True)
