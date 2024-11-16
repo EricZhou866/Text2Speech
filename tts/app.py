@@ -21,12 +21,12 @@ CORS(app)
 # Voice configurations
 VOICES = {
     'male': {
-        'en': 'en-US-ChristopherNeural',  # Male voice for English
-        'zh': 'zh-CN-YunxiNeural'  # Male voice for Chinese
+        'en': 'en-US-ChristopherNeural',
+        'zh': 'zh-CN-YunxiNeural'
     },
     'female': {
-        'en': 'en-US-JennyNeural',  # Female voice for English
-        'zh': 'zh-CN-XiaoxiaoNeural'  # Female voice for Chinese
+        'en': 'en-US-JennyNeural',
+        'zh': 'zh-CN-XiaoxiaoNeural'
     }
 }
 
@@ -53,24 +53,42 @@ def split_text(text):
 
 def merge_audio_files(input_files, output_file):
     """
-    Merge audio files using sox command line tool
+    Merge audio files using FFmpeg
     """
     try:
-        cmd = ['sox'] + input_files + [output_file]
+        if not input_files:
+            raise ValueError("No input files provided")
+
+        # Create a file list for FFmpeg
+        list_file = 'files.txt'
+        with open(list_file, 'w') as f:
+            for file in input_files:
+                f.write(f"file '{file}'\n")
+
+        # Merge files using FFmpeg
+        cmd = [
+            'ffmpeg',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', list_file,
+            '-c', 'copy',
+            output_file
+        ]
+
         subprocess.run(cmd, check=True, capture_output=True, text=True)
         logger.info(f"Successfully merged {len(input_files)} audio files")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error merging audio files: {e.stderr}")
+
+        # Clean up the list file
+        os.remove(list_file)
+
+    except Exception as e:
+        logger.error(f"Error merging audio files: {str(e)}")
         raise
 
 
 async def generate_speech(text, voice, output_file):
     """
     Generate speech using edge-tts
-    Args:
-        text (str): Text to convert to speech
-        voice (str): Voice ID to use
-        output_file (str): Path to save the audio file
     """
     try:
         communicate = edge_tts.Communicate(text, voice)
@@ -121,7 +139,7 @@ def text_to_speech():
             return {'error': 'No text provided'}, 400
 
         text = data.get('text', '')
-        voice_gender = data.get('voice', 'male')  # 'male' or 'female'
+        voice_gender = data.get('voice', 'male')
 
         if voice_gender not in VOICES:
             return {'error': 'Invalid voice type'}, 400
