@@ -4,6 +4,8 @@ A web-based Text-to-Speech (TTS) application that converts text to natural-sound
 
 Live demo: [http://text2speech.help/](http://text2speech.help/)
 
+https://github.com/EricZhou866/Text2Speech/blob/main/tts/static/tts-ui.png
+
 ## Features
 
 - Support for both English and Chinese text
