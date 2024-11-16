@@ -1,85 +1,212 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Text-to-Speech</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text-to-Speech Converter</title>
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            margin: 0; 
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            margin: 0;
             padding: 20px;
-            max-width: 800px;
+            max-width: 1200px;
             margin: 0 auto;
+            background-color: #f5f5f5;
+            color: #333;
         }
-        h1 { text-align: center; }
-        textarea { 
-            width: 100%; 
-            height: 100px; 
-            font-size: 16px; 
-            padding: 10px; 
-            margin-bottom: 20px;
-            box-sizing: border-box;
+
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-top: 2rem;
         }
-        .controls {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            align-items: center;
+
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+            font-size: 2.2rem;
+            margin-bottom: 2rem;
         }
-        button { 
-            padding: 10px 20px;
+
+        textarea {
+            width: 100%;
+            height: 300px;
             font-size: 16px;
+            padding: 15px;
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            resize: vertical;
+            box-sizing: border-box;
+            font-family: inherit;
+            line-height: 1.5;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #4CAF50;
+            box-shadow: 0 0 0 2px rgba(76,175,80,0.2);
+        }
+
+        .action-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            min-width: 140px;
+        }
+
+        .convert-btn {
             background-color: #4CAF50;
             color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
         }
+
+        .clear-btn {
+            background-color: #f5f5f5;
+            color: #666;
+            border: 1px solid #ddd;
+        }
+
         .download-btn {
             background-color: #2196F3;
+            color: white;
+            margin-left: 15px;
         }
+
         button:hover {
-            opacity: 0.9;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         }
+
         button:disabled {
             background-color: #cccccc;
             cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+            opacity: 0.7;
         }
+
         #status {
             text-align: center;
-            margin: 10px 0;
+            margin: 15px 0;
             color: #666;
+            font-size: 14px;
+            min-height: 20px;
+        }
+
+        .audio-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin: 20px 0;
+            display: none;
+        }
+
+        .audio-container audio {
+            flex: 1;
+            border-radius: 24px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+
+            h1 {
+                font-size: 1.8rem;
+            }
+
+            textarea {
+                height: 200px;
+            }
+
+            button {
+                padding: 10px 20px;
+                font-size: 14px;
+                min-width: 120px;
+            }
+
+            .audio-container {
+                flex-direction: column;
+            }
+
+            .audio-container audio {
+                width: 100%;
+            }
+
+            .audio-container button {
+                width: 100%;
+            }
         }
     </style>
 </head>
 <body>
-    <h1>Text-to-Speech (文字转语音)</h1>
-    
-    <textarea id="text-input" placeholder="Enter text here (支持中文和英文)"></textarea>
-    
-    <div class="controls">
-        <button id="convert-btn" onclick="convertToSpeech()">Convert to Speech</button>
+    <div class="container">
+        <h1>Text-to-Speech Converter</h1>
+
+        <textarea
+            id="text-input"
+            placeholder="Enter your text here (supports English and Chinese)&#10;&#10;Example:&#10;Hello World! 你好世界！"
+        ></textarea>
+
+        <div class="action-buttons">
+            <button
+                id="clear-btn"
+                class="clear-btn"
+                onclick="clearText()">
+                Clear Text
+            </button>
+            <button
+                id="convert-btn"
+                class="convert-btn"
+                onclick="convertToSpeech()">
+                Convert to Speech
+            </button>
+        </div>
+
+        <div id="status"></div>
+
+        <div id="audio-container" class="audio-container">
+            <audio id="audio-player" controls>
+                Your browser does not support the audio element.
+            </audio>
+            <button
+                id="download-btn"
+                class="download-btn"
+                onclick="downloadMP3()">
+                Download MP3
+            </button>
+        </div>
     </div>
 
-    <div id="status"></div>
-    
-    <audio id="audio-player" style="width: 100%; margin-top: 20px; display:none;" controls>
-        Your browser does not support the audio element.
-    </audio>
-
-    <div id="download-container" style="text-align: center; margin-top: 20px;">
-        <button id="download-btn" class="download-btn" style="display: none;" onclick="downloadMP3()">
-            Download MP3
-        </button>
-    </div>
-    
     <script>
         let audioBlob = null;
+
+        function clearText() {
+            document.getElementById("text-input").value = "";
+            document.getElementById("audio-container").style.display = "none";
+            document.getElementById("status").textContent = "";
+        }
 
         async function convertToSpeech() {
             const textInput = document.getElementById("text-input").value;
             const convertBtn = document.getElementById("convert-btn");
+            const clearBtn = document.getElementById("clear-btn");
+            const audioContainer = document.getElementById("audio-container");
             const audioPlayer = document.getElementById("audio-player");
-            const downloadBtn = document.getElementById("download-btn");
             const statusElement = document.getElementById("status");
 
             if (!textInput.trim()) {
@@ -87,11 +214,11 @@
                 return;
             }
 
-            // Disable button and show status
+            // Disable buttons and show status
             convertBtn.disabled = true;
+            clearBtn.disabled = true;
             statusElement.textContent = "Converting...";
-            downloadBtn.style.display = "none";
-            audioPlayer.style.display = "none";
+            audioContainer.style.display = "none";
 
             try {
                 const response = await fetch('/tts', {
@@ -109,9 +236,8 @@
 
                 // Set up audio player
                 audioPlayer.src = url;
-                audioPlayer.style.display = "block";
-                downloadBtn.style.display = "block";
-                
+                audioContainer.style.display = "flex";
+
                 // Auto play
                 audioPlayer.play();
                 statusElement.textContent = "Conversion complete!";
@@ -119,8 +245,11 @@
             } catch (error) {
                 console.error('Error:', error);
                 statusElement.textContent = "Error occurred during conversion!";
+                statusElement.style.color = "red";
             } finally {
+                // Re-enable buttons
                 convertBtn.disabled = false;
+                clearBtn.disabled = false;
             }
         }
 
