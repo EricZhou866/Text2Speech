@@ -8,6 +8,7 @@ import uuid
 import subprocess
 import logging
 from pathlib import Path
+import tempfile
 
 # Configure logging
 logging.basicConfig(
@@ -19,8 +20,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
+# Get application root directory
+APP_ROOT = Path(os.path.dirname(os.path.abspath(__file__)))
 # Define base temp directory
-BASE_TEMP_DIR = Path("/home/rslsync/vps/pd/Text2Speech/tts/temp")
+BASE_TEMP_DIR = APP_ROOT / 'temp'
 
 # Voice configurations
 VOICES = {
@@ -34,6 +37,7 @@ VOICES = {
     }
 }
 
+
 def split_text(text):
     """
     Split mixed text into Chinese and English segments
@@ -41,7 +45,7 @@ def split_text(text):
     """
     pattern = r'([\u4e00-\u9fff]+|[a-zA-Z0-9\s]+)'
     segments = re.findall(pattern, text)
-    
+
     result = []
     for segment in segments:
         segment = segment.strip()
@@ -50,14 +54,24 @@ def split_text(text):
         is_chinese = bool(re.search(r'[\u4e00-\u9fff]', segment))
         result.append((segment, is_chinese))
         logger.debug(f"Split segment: '{segment}' (Chinese: {is_chinese})")
-    
+
     return result
+
 
 def get_temp_dir():
     """Create a unique temporary directory"""
-    temp_dir = BASE_TEMP_DIR / str(uuid.uuid4())
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        # First try to use system temp directory
+        temp_dir = Path(tempfile.mkdtemp(prefix='tts_'))
+    except Exception as e:
+        logger.warning(f"Could not create temp dir in system temp: {e}")
+        # Fall back to application temp directory
+        temp_dir = BASE_TEMP_DIR / str(uuid.uuid4())
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.debug(f"Created temporary directory: {temp_dir}")
     return temp_dir
+
 
 def merge_audio_files(input_files, output_file):
     """
@@ -71,12 +85,13 @@ def merge_audio_files(input_files, output_file):
             for file in input_files:
                 with open(file, 'rb') as infile:
                     outfile.write(infile.read())
-                    
+
         logger.info(f"Successfully merged {len(input_files)} audio files")
-        
+
     except Exception as e:
         logger.error(f"Error merging audio files: {str(e)}")
         raise
+
 
 async def generate_speech(text, voice, output_file):
     """
@@ -90,33 +105,53 @@ async def generate_speech(text, voice, output_file):
         logger.error(f"Error generating speech: {str(e)}")
         raise
 
+
 def cleanup_directory(directory):
     """Clean up a directory and its contents"""
     try:
-        if directory.exists():
+        if directory and directory.exists():
             for file in directory.glob('*'):
                 try:
                     file.unlink()
                 except Exception as e:
                     logger.error(f"Error removing file {file}: {str(e)}")
-            directory.rmdir()
-            logger.debug(f"Cleaned up directory: {directory}")
+            try:
+                directory.rmdir()
+                logger.debug(f"Cleaned up directory: {directory}")
+            except Exception as e:
+                logger.error(f"Error removing directory {directory}: {str(e)}")
     except Exception as e:
         logger.error(f"Error in cleanup: {str(e)}")
+
+
+def ensure_directory_exists(directory):
+    """Ensure directory exists and has correct permissions"""
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        # Try to make directory writable
+        try:
+            directory.chmod(0o755)
+        except Exception as e:
+            logger.warning(f"Could not set permissions for {directory}: {e}")
+    except Exception as e:
+        logger.error(f"Error creating directory {directory}: {e}")
+        raise
+
 
 @app.route('/')
 def home():
     return render_template('index.html')
 
+
 @app.route('/tts', methods=['POST'])
 def text_to_speech():
     work_dir = None
     output_file = None
-    
+
     try:
         # Create working directory
         work_dir = get_temp_dir()
-        
+
         # Validate input
         data = request.get_json()
         if not data or 'text' not in data:
@@ -124,7 +159,7 @@ def text_to_speech():
 
         text = data.get('text', '')
         voice_gender = data.get('voice', 'male')
-        
+
         if voice_gender not in VOICES:
             return {'error': 'Invalid voice type'}, 400
 
@@ -145,11 +180,11 @@ def text_to_speech():
         # Convert each segment
         for i, (segment, is_chinese) in enumerate(segments):
             temp_file = work_dir / f'segment_{i}_{session_id}.mp3'
-            
+
             # Select appropriate voice
             lang = 'zh' if is_chinese else 'en'
             voice = VOICES[voice_gender][lang]
-            
+
             # Generate speech for segment
             asyncio.run(generate_speech(segment, voice, str(temp_file)))
             temp_files.append(str(temp_file))
@@ -158,7 +193,7 @@ def text_to_speech():
         if temp_files:
             merge_audio_files(temp_files, str(output_file))
             return send_file(str(output_file), as_attachment=True)
-        
+
         return {'error': 'No audio generated'}, 500
 
     except Exception as e:
@@ -169,7 +204,18 @@ def text_to_speech():
         if work_dir:
             cleanup_directory(work_dir)
 
+
+def initialize_app():
+    """Initialize application directories and settings"""
+    try:
+        # Ensure base temp directory exists
+        ensure_directory_exists(BASE_TEMP_DIR)
+        logger.info(f"Initialized application with temp directory: {BASE_TEMP_DIR}")
+    except Exception as e:
+        logger.error(f"Failed to initialize application: {e}")
+        raise
+
+
 if __name__ == '__main__':
-    # Ensure base temp directory exists
-    BASE_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    initialize_app()
     app.run(host='0.0.0.0', port=5001, debug=True)
