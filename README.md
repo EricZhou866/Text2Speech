@@ -35,9 +35,9 @@ Live demo: [http://text2speech.help/](http://text2speech.help/)
 
 ## Quick Start
 
-```bash
+
 # Clone repository
-git clone https://github.com/yourusername/text-to-speech.git
+git clone https://github.com/EricZhou866/Text2Speech.git
 
 # Install dependencies
 pip install -r requirements.txt
@@ -62,7 +62,7 @@ if response.status_code == 200:
 License
 MIT License - see LICENSE file for details.
 
-```markdown
+
 # Installation Guide
 
 ## Prerequisites
@@ -76,7 +76,7 @@ MIT License - see LICENSE file for details.
 ## Development Setup
 
 1. Install Python dependencies:
-```bash
+
 # Create virtual environment (recommended)
 python -m venv venv
 source venv/bin/activate  # Linux/macOS
@@ -248,7 +248,8 @@ git pull
 pip install -r requirements.txt
 sudo systemctl restart tts
 Support
-For issues and support:
+
+# For issues and support:
 •	GitHub Issues: Create Issue
 •	Email: EricZhou866@gmail.com
 
