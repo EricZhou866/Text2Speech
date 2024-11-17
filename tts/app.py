@@ -1,5 +1,5 @@
-from flask import Flask, request, send_file, render_template
-from flask_cors import CORS
+from quart import Quart, request, send_file, render_template
+from quart_cors import cors
 import asyncio
 import edge_tts
 import os
@@ -9,6 +9,9 @@ import subprocess
 import logging
 from pathlib import Path
 import tempfile
+from hypercorn.config import Config
+from hypercorn.asyncio import serve
+import io
 
 # Configure logging
 logging.basicConfig(
@@ -17,13 +20,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-CORS(app)
+app = Quart(__name__)
+app = cors(app, allow_origin="*")
 
 # Get application root directory
 APP_ROOT = Path(os.path.dirname(os.path.abspath(__file__)))
 # Define base temp directory
 BASE_TEMP_DIR = APP_ROOT / 'temp'
+
+# Configuration
+MAX_SEGMENT_LENGTH = 1000
+MAX_CONCURRENT_TASKS = 4
+DEFAULT_TIMEOUT = 30
+BUFFER_SIZE = 10485760
 
 # Voice configurations
 VOICES = {
@@ -38,11 +47,49 @@ VOICES = {
 }
 
 
+def ensure_directory_exists(directory):
+    """Ensure directory exists and has correct permissions"""
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        try:
+            directory.chmod(0o755)
+        except Exception as e:
+            logger.warning(f"Could not set permissions for {directory}: {e}")
+    except Exception as e:
+        logger.error(f"Error creating directory {directory}: {e}")
+        raise
+
+
+def cleanup_files(files):
+    """Clean up a list of files"""
+    for file in files:
+        try:
+            if os.path.exists(file):
+                os.remove(file)
+        except Exception as e:
+            logger.error(f"Error removing file {file}: {str(e)}")
+
+
+def cleanup_directory(directory):
+    """Clean up a directory and its contents"""
+    try:
+        if directory and os.path.exists(directory):
+            for file in os.listdir(directory):
+                try:
+                    os.remove(os.path.join(directory, file))
+                except Exception as e:
+                    logger.error(f"Error removing file {file}: {str(e)}")
+            try:
+                os.rmdir(directory)
+                logger.debug(f"Cleaned up directory: {directory}")
+            except Exception as e:
+                logger.error(f"Error removing directory {directory}: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error in cleanup: {str(e)}")
+
+
 def split_text(text):
-    """
-    Split mixed text into Chinese and English segments
-    Returns a list of tuples (text, is_chinese)
-    """
+    """Split mixed text into Chinese and English segments"""
     pattern = r'([\u4e00-\u9fff]+|[a-zA-Z0-9\s]+)'
     segments = re.findall(pattern, text)
 
@@ -58,14 +105,43 @@ def split_text(text):
     return result
 
 
+def split_long_text(text, max_length=MAX_SEGMENT_LENGTH):
+    """Split text into smaller chunks"""
+    if len(text) <= max_length:
+        return [text]
+
+    delimiters = '.!?。！？'
+    chunks = []
+    current_chunk = []
+    current_length = 0
+
+    sentences = re.split(f'([{delimiters}])', text)
+    for i in range(0, len(sentences), 2):
+        sentence = sentences[i]
+        if i + 1 < len(sentences):
+            sentence += sentences[i + 1]
+
+        if current_length + len(sentence) <= max_length:
+            current_chunk.append(sentence)
+            current_length += len(sentence)
+        else:
+            if current_chunk:
+                chunks.append(''.join(current_chunk))
+            current_chunk = [sentence]
+            current_length = len(sentence)
+
+    if current_chunk:
+        chunks.append(''.join(current_chunk))
+
+    return chunks
+
+
 def get_temp_dir():
     """Create a unique temporary directory"""
     try:
-        # First try to use system temp directory
         temp_dir = Path(tempfile.mkdtemp(prefix='tts_'))
     except Exception as e:
         logger.warning(f"Could not create temp dir in system temp: {e}")
-        # Fall back to application temp directory
         temp_dir = BASE_TEMP_DIR / str(uuid.uuid4())
         temp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -73,10 +149,8 @@ def get_temp_dir():
     return temp_dir
 
 
-def merge_audio_files(input_files, output_file):
-    """
-    Merge audio files using pure Python
-    """
+def merge_audio_files(input_files, output_file, buffer_size=BUFFER_SIZE):
+    """Merge audio files using buffered reading/writing"""
     try:
         if not input_files:
             raise ValueError("No input files provided")
@@ -84,7 +158,11 @@ def merge_audio_files(input_files, output_file):
         with open(output_file, 'wb') as outfile:
             for file in input_files:
                 with open(file, 'rb') as infile:
-                    outfile.write(infile.read())
+                    while True:
+                        buffer = infile.read(buffer_size)
+                        if not buffer:
+                            break
+                        outfile.write(buffer)
 
         logger.info(f"Successfully merged {len(input_files)} audio files")
 
@@ -93,67 +171,51 @@ def merge_audio_files(input_files, output_file):
         raise
 
 
-async def generate_speech(text, voice, output_file):
-    """
-    Generate speech using edge-tts
-    """
+async def generate_speech(text, voice, output_file, timeout=DEFAULT_TIMEOUT):
+    """Generate speech with timeout control"""
     try:
         communicate = edge_tts.Communicate(text, voice)
-        await communicate.save(output_file)
+        await asyncio.wait_for(communicate.save(output_file), timeout=timeout)
         logger.info(f"Generated speech for text: '{text[:50]}...' using voice: {voice}")
+    except asyncio.TimeoutError:
+        logger.error(f"Speech generation timed out for text: '{text[:50]}...'")
+        raise
     except Exception as e:
         logger.error(f"Error generating speech: {str(e)}")
         raise
 
 
-def cleanup_directory(directory):
-    """Clean up a directory and its contents"""
-    try:
-        if directory and directory.exists():
-            for file in directory.glob('*'):
-                try:
-                    file.unlink()
-                except Exception as e:
-                    logger.error(f"Error removing file {file}: {str(e)}")
-            try:
-                directory.rmdir()
-                logger.debug(f"Cleaned up directory: {directory}")
-            except Exception as e:
-                logger.error(f"Error removing directory {directory}: {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in cleanup: {str(e)}")
+async def process_text_chunk(chunk, voice_gender, work_dir, session_id, chunk_index):
+    """Process a single chunk of text"""
+    segments = split_text(chunk)
+    chunk_files = []
 
+    for i, (segment, is_chinese) in enumerate(segments):
+        temp_file = work_dir / f'segment_{chunk_index}_{i}_{session_id}.mp3'
+        lang = 'zh' if is_chinese else 'en'
+        voice = VOICES[voice_gender][lang]
 
-def ensure_directory_exists(directory):
-    """Ensure directory exists and has correct permissions"""
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-        # Try to make directory writable
-        try:
-            directory.chmod(0o755)
-        except Exception as e:
-            logger.warning(f"Could not set permissions for {directory}: {e}")
-    except Exception as e:
-        logger.error(f"Error creating directory {directory}: {e}")
-        raise
+        await generate_speech(segment, voice, str(temp_file))
+        chunk_files.append(str(temp_file))
+
+    return chunk_files
 
 
 @app.route('/')
-def home():
-    return render_template('index.html')
+async def home():
+    return await render_template('index.html')
 
 
 @app.route('/tts', methods=['POST'])
-def text_to_speech():
+async def text_to_speech():
     work_dir = None
     output_file = None
+    all_temp_files = []
 
     try:
-        # Create working directory
         work_dir = get_temp_dir()
 
-        # Validate input
-        data = request.get_json()
+        data = await request.get_json()
         if not data or 'text' not in data:
             return {'error': 'No text provided'}, 400
 
@@ -165,50 +227,64 @@ def text_to_speech():
 
         logger.info(f'Converting text with {voice_gender} voice')
 
-        # Generate unique session ID
         session_id = str(uuid.uuid4())
         output_file = work_dir / f'speech_{session_id}.mp3'
 
-        # Split text into segments
-        segments = split_text(text)
-        if not segments:
-            return {'error': 'No valid text segments'}, 400
+        text_chunks = split_long_text(text)
 
-        # Store temporary file paths
-        temp_files = []
+        # Process chunks with bounded concurrency
+        sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
-        # Convert each segment
-        for i, (segment, is_chinese) in enumerate(segments):
-            temp_file = work_dir / f'segment_{i}_{session_id}.mp3'
+        async def process_with_semaphore(chunk, index):
+            async with sem:
+                return await process_text_chunk(chunk, voice_gender, work_dir, session_id, index)
 
-            # Select appropriate voice
-            lang = 'zh' if is_chinese else 'en'
-            voice = VOICES[voice_gender][lang]
+        tasks = [process_with_semaphore(chunk, i) for i, chunk in enumerate(text_chunks)]
+        chunk_results = await asyncio.gather(*tasks)
 
-            # Generate speech for segment
-            asyncio.run(generate_speech(segment, voice, str(temp_file)))
-            temp_files.append(str(temp_file))
+        for chunk_files in chunk_results:
+            all_temp_files.extend(chunk_files)
+
+        if not all_temp_files:
+            return {'error': 'No audio generated'}, 500
 
         # Merge audio files
-        if temp_files:
-            merge_audio_files(temp_files, str(output_file))
-            return send_file(str(output_file), as_attachment=True)
+        merge_audio_files(all_temp_files, str(output_file))
 
-        return {'error': 'No audio generated'}, 500
+        # Clean up temporary segment files
+        cleanup_files(all_temp_files)
+
+        # Read the final file
+        if not os.path.exists(output_file):
+            raise FileNotFoundError(f"Output file not found: {output_file}")
+
+        with open(output_file, 'rb') as f:
+            data = f.read()
+
+        # Create response
+        return await send_file(
+            io.BytesIO(data),
+            mimetype='audio/mpeg'
+        )
 
     except Exception as e:
         logger.error(f"Error in text_to_speech: {str(e)}", exc_info=True)
         return {'error': str(e)}, 500
 
     finally:
-        if work_dir:
-            cleanup_directory(work_dir)
+        # Clean up remaining files
+        try:
+            if output_file and os.path.exists(output_file):
+                os.remove(output_file)
+            if work_dir and os.path.exists(work_dir):
+                os.rmdir(work_dir)
+        except Exception as e:
+            logger.error(f"Error in final cleanup: {str(e)}")
 
 
 def initialize_app():
     """Initialize application directories and settings"""
     try:
-        # Ensure base temp directory exists
         ensure_directory_exists(BASE_TEMP_DIR)
         logger.info(f"Initialized application with temp directory: {BASE_TEMP_DIR}")
     except Exception as e:
@@ -216,6 +292,12 @@ def initialize_app():
         raise
 
 
+async def run_app():
+    config = Config()
+    config.bind = ["0.0.0.0:5001"]
+    await serve(app, config)
+
+
 if __name__ == '__main__':
     initialize_app()
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    asyncio.run(run_app())
