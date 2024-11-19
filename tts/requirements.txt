@@ -1,0 +1,7 @@
+# requirements.txt
+quart==0.18.4
+quart-cors==0.7.0
+edge-tts==6.1.9
+hypercorn==0.14.3
+python-dotenv==1.0.0
+
