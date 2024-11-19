@@ -90,7 +90,8 @@ def cleanup_directory(directory):
 
 def split_text(text):
     """Split mixed text into Chinese and English segments"""
-    pattern = r'([\u4e00-\u9fff]+|[a-zA-Z0-9\s]+)'
+    # Pattern to handle contractions and possessives
+    pattern = r"([\u4e00-\u9fff]+|[a-zA-Z0-9][a-zA-Z0-9']*[a-zA-Z0-9]+(?:\s+[a-zA-Z0-9][a-zA-Z0-9']*[a-zA-Z0-9]+)*)"
     segments = re.findall(pattern, text)
 
     result = []
@@ -98,12 +99,18 @@ def split_text(text):
         segment = segment.strip()
         if not segment:
             continue
+        # Check if segment contains Chinese characters
         is_chinese = bool(re.search(r'[\u4e00-\u9fff]', segment))
+        # For English segments, preserve contractions and possessives
+        if not is_chinese:
+            # Combine with any following possessive or contraction
+            if "'" in segment:
+                segment = segment.strip("'")  # Remove any standalone apostrophes
+        
         result.append((segment, is_chinese))
         logger.debug(f"Split segment: '{segment}' (Chinese: {is_chinese})")
 
     return result
-
 
 def split_long_text(text, max_length=MAX_SEGMENT_LENGTH):
     """Split text into smaller chunks"""
