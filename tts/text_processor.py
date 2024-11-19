@@ -11,7 +11,7 @@ class TextProcessor:
     @staticmethod
     def preprocess_text(text: str) -> List[str]:
         """
-        Preprocess text by splitting into lines, preserving all content including numbers.
+        Preprocess text by splitting into lines while preserving empty lines and numbers.
         
         Args:
             text: Input text with potential multiple lines
@@ -22,14 +22,14 @@ class TextProcessor:
         if not text:
             return []
             
-        # Split text into lines but keep empty lines
         lines = text.split('\n')
         return [line.strip() for line in lines]
 
     @staticmethod
     def detect_text_type(text: str) -> str:
         """
-        Detect text type including pure numbers.
+        Detect text type including standalone numbers.
+        Numbers are treated based on context.
         
         Args:
             text: Input text to analyze
@@ -37,15 +37,18 @@ class TextProcessor:
         Returns:
             str: 'zh', 'en', or 'mixed'
         """
-        # Special case for pure numbers
+        if not text.strip():
+            return 'en'
+            
+        # Handle standalone numbers
         if text.strip().isdigit():
             return 'en'
 
-        # Chinese character detection (including punctuation)
+        # Check for Chinese characters and punctuation
         has_chinese = bool(re.search(r'[\u4e00-\u9fff，。！？；：""''（）、]', text))
-        # English character detection (including letters and common punctuation)
+        # Check for English characters (excluding numbers initially)
         has_english = bool(re.search(r'[a-zA-Z]', text))
-
+        
         if has_chinese and has_english:
             return 'mixed'
         elif has_chinese:
@@ -55,7 +58,8 @@ class TextProcessor:
     @staticmethod
     def split_english_sentences(text: str) -> List[str]:
         """
-        Split English text into natural speech segments, preserving numbers.
+        Split English text into natural speech segments.
+        Preserves numbers and their context.
         
         Args:
             text: English text to split
@@ -66,11 +70,10 @@ class TextProcessor:
         if not text.strip():
             return []
 
-        # Handle standalone numbers and very short text
+        # Handle standalone numbers
         if text.strip().isdigit():
             return [text.strip()]
 
-        # Normal sentence processing
         sentences = []
         current_sentence = []
         words = text.split()
@@ -82,7 +85,7 @@ class TextProcessor:
                 word.endswith((',', ';', ':')) or 
                 len(' '.join(current_sentence)) >= MAX_SEGMENT_LENGTH):
                 
-                # Handle abbreviations
+                # Handle abbreviations and numbers with periods
                 if (word.endswith('.') and 
                     not word[:-1].isdigit() and
                     (all(c.isupper() for c in word[:-1]) or 
@@ -90,14 +93,14 @@ class TextProcessor:
                     continue
                 
                 sentence = ' '.join(current_sentence).strip()
-                if len(sentence) >= MIN_SEGMENT_LENGTH or any(c.isdigit() for c in sentence):
+                if len(sentence) >= MIN_SEGMENT_LENGTH or sentence.strip().isdigit():
                     sentences.append(sentence)
                 current_sentence = []
 
         # Handle remaining text
         if current_sentence:
             sentence = ' '.join(current_sentence).strip()
-            if len(sentence) >= MIN_SEGMENT_LENGTH or any(c.isdigit() for c in sentence):
+            if len(sentence) >= MIN_SEGMENT_LENGTH or sentence.strip().isdigit():
                 sentences.append(sentence)
 
         return sentences
@@ -105,7 +108,7 @@ class TextProcessor:
     @staticmethod
     def split_chinese_text(text: str) -> List[str]:
         """
-        Split Chinese text into natural segments.
+        Split Chinese text into natural segments while keeping numbers in context.
         
         Args:
             text: Chinese text to split
@@ -116,7 +119,11 @@ class TextProcessor:
         if not text.strip():
             return []
 
-        # Split by major punctuation while preserving the punctuation
+        # For short text, keep it as one segment
+        if len(text) <= MAX_SEGMENT_LENGTH:
+            return [text.strip()]
+
+        # Split by major punctuation while preserving it
         segments = re.split(r'([。！？；])', text)
         result = []
         
@@ -124,7 +131,6 @@ class TextProcessor:
         while i < len(segments):
             current = segments[i].strip()
             
-            # Add punctuation if available
             if i + 1 < len(segments) and segments[i + 1] in '。！？；':
                 current += segments[i + 1]
                 i += 2
@@ -133,11 +139,11 @@ class TextProcessor:
             
             if current:
                 result.append(current)
-        
+
+        # Only split long segments if necessary
         final_result = []
         for segment in result:
             if len(segment) > MAX_SEGMENT_LENGTH:
-                # Split by minor punctuation for long segments
                 subsegments = re.split(r'([，、：])', segment)
                 current = ''
                 
@@ -163,7 +169,7 @@ class TextProcessor:
     @staticmethod
     def split_mixed_text(text: str) -> List[Tuple[str, str]]:
         """
-        Process mixed Chinese-English text with context-aware handling.
+        Process mixed Chinese-English text with context-aware number handling.
         
         Args:
             text: Mixed language text to split
@@ -183,7 +189,16 @@ class TextProcessor:
         buffer = ""
         i = 0
 
+        def is_chinese_context(text: str, pos: int) -> bool:
+            """Helper function to determine if a position is in Chinese context."""
+            # Look at surrounding context (up to 5 chars before and after)
+            pre_text = text[max(0, pos-5):pos]
+            post_text = text[pos:min(len(text), pos+5)]
+            
+            return bool(re.search(r'[\u4e00-\u9fff]', pre_text + post_text))
+
         def flush_buffer():
+            """Helper function to add buffered text to segments."""
             nonlocal buffer, current_type
             if buffer.strip():
                 segments.append((buffer, current_type))
@@ -192,22 +207,39 @@ class TextProcessor:
         while i < len(text):
             char = text[i]
             
-            # Chinese character detection
             if re.match(r'[\u4e00-\u9fff，。！？；：""''（）、]', char):
                 if current_type != 'zh':
                     flush_buffer()
                     current_type = 'zh'
                 buffer += char
                 
-            # English character detection
-            elif char.isdigit() or re.match(r'[a-zA-Z]', char):
+            elif char.isdigit():
+                # Look ahead for complete number with symbols
+                num_start = i
+                while i < len(text) and (text[i].isdigit() or text[i] in '.%'):
+                    i += 1
+                number_with_symbols = text[num_start:i]
+                i -= 1  # Adjust for main loop increment
+                
+                # Determine if number is in Chinese context
+                if is_chinese_context(text, num_start):
+                    if current_type != 'zh':
+                        flush_buffer()
+                        current_type = 'zh'
+                else:
+                    if current_type != 'en':
+                        flush_buffer()
+                        current_type = 'en'
+                
+                buffer += number_with_symbols
+                
+            elif re.match(r'[a-zA-Z]', char):
                 if current_type != 'en':
                     flush_buffer()
                     current_type = 'en'
                 buffer += char
                 
-            # Punctuation and spaces
-            else:
+            else:  # Punctuation and spaces
                 if buffer:
                     buffer += char
             
@@ -218,13 +250,9 @@ class TextProcessor:
             flush_buffer()
 
         # Post-process segments
-        processed_segments = []
-        for text, lang in segments:
-            text = text.strip()
-            if text:
-                # Include segment if it meets length requirements or contains numbers
-                if (lang == 'zh' and len(text) >= 1) or \
-                   (lang == 'en' and (len(text) >= MIN_SEGMENT_LENGTH or text.isdigit())):
-                    processed_segments.append((text, lang))
-
-        return processed_segments
+        return [(text.strip(), lang) for text, lang in segments 
+                if text.strip() and (
+                    lang == 'zh' or 
+                    len(text.strip()) >= MIN_SEGMENT_LENGTH or 
+                    text.strip().isdigit()
+                )]

@@ -1,7 +1,6 @@
 # speech_generator.py
 """
-Speech generation module.
-Handles TTS conversion using Edge TTS with preserved number handling.
+Speech generation module with improved handling of mixed language and numbers.
 """
 import asyncio
 import edge_tts
@@ -69,7 +68,7 @@ class SpeechGenerator:
                                chunk_index: int) -> List[str]:
         """
         Process a text chunk and generate speech segments.
-        Preserves numbers and their positions.
+        Handles mixed language content and preserves number context.
         
         Args:
             chunk: Text chunk to process
@@ -81,57 +80,67 @@ class SpeechGenerator:
             List of generated audio file paths
         """
         try:
-            # Split the chunk into separate lines, preserving empty lines and numbers
+            # Split the chunk into separate lines, preserving empty lines
             lines = chunk.split('\n')
             chunk_files = []
             
             for i, line in enumerate(lines):
-                if not line.strip():
+                stripped_line = line.strip()
+                if not stripped_line:
                     continue
-                
-                # Preserve original line position for file naming
+
+                # Keep original line position for file naming
                 original_index = i
-                
-                # Special handling for standalone numbers
-                if line.strip().isdigit():
+
+                # Handle standalone numbers (e.g., line numbers)
+                if stripped_line.isdigit():
                     voice = VOICES[voice_gender]['en']
                     temp_file = self.work_dir / f'segment_{chunk_index}_{original_index}_0_{session_id}.mp3'
-                    await self.generate_speech(line.strip(), voice, str(temp_file))
+                    await self.generate_speech(stripped_line, voice, str(temp_file))
                     chunk_files.append(str(temp_file))
                     continue
-                    
-                text_type = self.text_processor.detect_text_type(line)
-                
+
+                # Detect text type for the whole line
+                text_type = self.text_processor.detect_text_type(stripped_line)
+
                 if text_type == 'en':
-                    sentences = self.text_processor.split_english_sentences(line)
+                    # Process English text
+                    sentences = self.text_processor.split_english_sentences(stripped_line)
                     voice = VOICES[voice_gender]['en']
+                    
                     for j, sentence in enumerate(sentences):
                         if len(sentence.strip()) >= MIN_SEGMENT_LENGTH or sentence.strip().isdigit():
                             temp_file = self.work_dir / f'segment_{chunk_index}_{original_index}_{j}_{session_id}.mp3'
                             await self.generate_speech(sentence, voice, str(temp_file))
                             chunk_files.append(str(temp_file))
-                            
+
                 elif text_type == 'zh':
-                    sentences = self.text_processor.split_chinese_text(line)
+                    # Process Chinese text, keeping numbers in context
+                    sentences = self.text_processor.split_chinese_text(stripped_line)
                     voice = VOICES[voice_gender]['zh']
+                    
                     for j, sentence in enumerate(sentences):
                         if len(sentence.strip()) >= 1:
                             temp_file = self.work_dir / f'segment_{chunk_index}_{original_index}_{j}_{session_id}.mp3'
                             await self.generate_speech(sentence, voice, str(temp_file))
                             chunk_files.append(str(temp_file))
-                            
-                else:  # mixed
-                    segments = self.text_processor.split_mixed_text(line)
+
+                else:  # mixed text
+                    # Process mixed text with context-aware number handling
+                    segments = self.text_processor.split_mixed_text(stripped_line)
+                    
                     for j, (segment, lang) in enumerate(segments):
                         voice = VOICES[voice_gender][lang]
+                        # Use appropriate minimum length based on language
                         min_len = 1 if lang == 'zh' else MIN_SEGMENT_LENGTH
+                        
                         if len(segment.strip()) >= min_len or segment.strip().isdigit():
                             temp_file = self.work_dir / f'segment_{chunk_index}_{original_index}_{j}_{session_id}.mp3'
                             await self.generate_speech(segment, voice, str(temp_file))
                             chunk_files.append(str(temp_file))
-            
+
             return chunk_files
-            
+
         except Exception as e:
             logger.error(f"Error processing chunk: {str(e)}")
             raise
@@ -143,7 +152,7 @@ class SpeechGenerator:
                                 line_index: int) -> List[str]:
         """
         Process a single line of text.
-        Handles standalone numbers and regular text.
+        Handles standalone numbers and mixed content.
         
         Args:
             line: Single line of text to process
@@ -155,14 +164,20 @@ class SpeechGenerator:
             List of generated audio file paths
         """
         try:
+            # Handle empty lines
+            if not line.strip():
+                return []
+
+            # Handle standalone numbers
             if line.strip().isdigit():
                 voice = VOICES[voice_gender]['en']
                 temp_file = self.work_dir / f'segment_0_{line_index}_0_{session_id}.mp3'
                 await self.generate_speech(line.strip(), voice, str(temp_file))
                 return [str(temp_file)]
-                
+
+            # Process regular text
             return await self.process_text_chunk(line, voice_gender, session_id, line_index)
-            
+
         except Exception as e:
             logger.error(f"Error processing line: {str(e)}")
             raise
