@@ -1,7 +1,7 @@
 # speech_generator.py
 """
 Speech generation module.
-Handles TTS conversion using Edge TTS.
+Handles TTS conversion using Edge TTS with preserved number handling.
 """
 import asyncio
 import edge_tts
@@ -22,6 +22,7 @@ class SpeechGenerator:
             work_dir: Directory for temporary files
         """
         self.work_dir = work_dir
+        self.text_processor = TextProcessor()
 
     async def generate_speech(self, 
                             text: str, 
@@ -68,7 +69,7 @@ class SpeechGenerator:
                                chunk_index: int) -> List[str]:
         """
         Process a text chunk and generate speech segments.
-        Handles each line separately.
+        Preserves numbers and their positions.
         
         Args:
             chunk: Text chunk to process
@@ -80,42 +81,52 @@ class SpeechGenerator:
             List of generated audio file paths
         """
         try:
-            text_processor = TextProcessor()
-            # Split the chunk into separate lines
-            lines = text_processor.preprocess_text(chunk)
+            # Split the chunk into separate lines, preserving empty lines and numbers
+            lines = chunk.split('\n')
             chunk_files = []
             
             for i, line in enumerate(lines):
                 if not line.strip():
                     continue
+                
+                # Preserve original line position for file naming
+                original_index = i
+                
+                # Special handling for standalone numbers
+                if line.strip().isdigit():
+                    voice = VOICES[voice_gender]['en']
+                    temp_file = self.work_dir / f'segment_{chunk_index}_{original_index}_0_{session_id}.mp3'
+                    await self.generate_speech(line.strip(), voice, str(temp_file))
+                    chunk_files.append(str(temp_file))
+                    continue
                     
-                text_type = text_processor.detect_text_type(line)
+                text_type = self.text_processor.detect_text_type(line)
                 
                 if text_type == 'en':
-                    sentences = text_processor.split_english_sentences(line)
+                    sentences = self.text_processor.split_english_sentences(line)
                     voice = VOICES[voice_gender]['en']
                     for j, sentence in enumerate(sentences):
                         if len(sentence.strip()) >= MIN_SEGMENT_LENGTH or sentence.strip().isdigit():
-                            temp_file = self.work_dir / f'segment_{chunk_index}_{i}_{j}_{session_id}.mp3'
+                            temp_file = self.work_dir / f'segment_{chunk_index}_{original_index}_{j}_{session_id}.mp3'
                             await self.generate_speech(sentence, voice, str(temp_file))
                             chunk_files.append(str(temp_file))
                             
                 elif text_type == 'zh':
-                    sentences = text_processor.split_chinese_text(line)
+                    sentences = self.text_processor.split_chinese_text(line)
                     voice = VOICES[voice_gender]['zh']
                     for j, sentence in enumerate(sentences):
                         if len(sentence.strip()) >= 1:
-                            temp_file = self.work_dir / f'segment_{chunk_index}_{i}_{j}_{session_id}.mp3'
+                            temp_file = self.work_dir / f'segment_{chunk_index}_{original_index}_{j}_{session_id}.mp3'
                             await self.generate_speech(sentence, voice, str(temp_file))
                             chunk_files.append(str(temp_file))
                             
                 else:  # mixed
-                    segments = text_processor.split_mixed_text(line)
+                    segments = self.text_processor.split_mixed_text(line)
                     for j, (segment, lang) in enumerate(segments):
+                        voice = VOICES[voice_gender][lang]
                         min_len = 1 if lang == 'zh' else MIN_SEGMENT_LENGTH
                         if len(segment.strip()) >= min_len or segment.strip().isdigit():
-                            voice = VOICES[voice_gender][lang]
-                            temp_file = self.work_dir / f'segment_{chunk_index}_{i}_{j}_{session_id}.mp3'
+                            temp_file = self.work_dir / f'segment_{chunk_index}_{original_index}_{j}_{session_id}.mp3'
                             await self.generate_speech(segment, voice, str(temp_file))
                             chunk_files.append(str(temp_file))
             
@@ -124,3 +135,49 @@ class SpeechGenerator:
         except Exception as e:
             logger.error(f"Error processing chunk: {str(e)}")
             raise
+
+    async def process_single_line(self,
+                                line: str,
+                                voice_gender: str,
+                                session_id: str,
+                                line_index: int) -> List[str]:
+        """
+        Process a single line of text.
+        Handles standalone numbers and regular text.
+        
+        Args:
+            line: Single line of text to process
+            voice_gender: Gender of voice to use
+            session_id: Unique session identifier
+            line_index: Index of the line
+            
+        Returns:
+            List of generated audio file paths
+        """
+        try:
+            if line.strip().isdigit():
+                voice = VOICES[voice_gender]['en']
+                temp_file = self.work_dir / f'segment_0_{line_index}_0_{session_id}.mp3'
+                await self.generate_speech(line.strip(), voice, str(temp_file))
+                return [str(temp_file)]
+                
+            return await self.process_text_chunk(line, voice_gender, session_id, line_index)
+            
+        except Exception as e:
+            logger.error(f"Error processing line: {str(e)}")
+            raise
+
+    def cleanup_files(self, files: List[str]) -> None:
+        """
+        Clean up temporary audio files.
+        
+        Args:
+            files: List of file paths to clean up
+        """
+        for file in files:
+            try:
+                path = Path(file)
+                if path.exists():
+                    path.unlink()
+            except Exception as e:
+                logger.error(f"Error cleaning up file {file}: {str(e)}")
