@@ -8,17 +8,26 @@ import edge_tts
 import logging
 from typing import List
 from pathlib import Path
-from config import DEFAULT_TIMEOUT, VOICES, MIN_SEGMENT_LENGTH  # Changed from relative import
-from text_processor import TextProcessor                        # Changed from relative import
+from config import DEFAULT_TIMEOUT, VOICES, MIN_SEGMENT_LENGTH
+from text_processor import TextProcessor
 
 logger = logging.getLogger(__name__)
 
-
 class SpeechGenerator:
     def __init__(self, work_dir: Path):
+        """
+        Initialize SpeechGenerator with working directory.
+        
+        Args:
+            work_dir: Directory for temporary files
+        """
         self.work_dir = work_dir
 
-    async def generate_speech(self, text: str, voice: str, output_file: str, timeout: int = DEFAULT_TIMEOUT) -> bool:
+    async def generate_speech(self, 
+                            text: str, 
+                            voice: str, 
+                            output_file: str, 
+                            timeout: int = DEFAULT_TIMEOUT) -> bool:
         """
         Generate speech for a given text segment.
         
@@ -45,7 +54,7 @@ class SpeechGenerator:
             if not Path(output_file).exists() or Path(output_file).stat().st_size == 0:
                 raise ValueError(f"Failed to generate audio for text: {text[:50]}...")
                 
-            logger.info(f"Generated speech for text: '{text[:50]}...'")
+            logger.info(f"Generated speech for text: '{text}'")
             return True
             
         except Exception as e:
@@ -59,6 +68,7 @@ class SpeechGenerator:
                                chunk_index: int) -> List[str]:
         """
         Process a text chunk and generate speech segments.
+        Handles each line separately.
         
         Args:
             chunk: Text chunk to process
@@ -70,45 +80,47 @@ class SpeechGenerator:
             List of generated audio file paths
         """
         try:
-            chunk = chunk.strip()
-            if not chunk:
-                return []
-
             text_processor = TextProcessor()
-            text_type = text_processor.detect_text_type(chunk)
+            # Split the chunk into separate lines
+            lines = text_processor.preprocess_text(chunk)
             chunk_files = []
             
-            if text_type == 'en':
-                sentences = text_processor.split_english_sentences(chunk)
-                voice = VOICES[voice_gender]['en']
-                for i, sentence in enumerate(sentences):
-                    if len(sentence.strip()) >= MIN_SEGMENT_LENGTH:
-                        temp_file = self.work_dir / f'segment_{chunk_index}_{i}_{session_id}.mp3'
-                        await self.generate_speech(sentence, voice, str(temp_file))
-                        chunk_files.append(str(temp_file))
-                        
-            elif text_type == 'zh':
-                sentences = text_processor.split_chinese_text(chunk)
-                voice = VOICES[voice_gender]['zh']
-                for i, sentence in enumerate(sentences):
-                    if len(sentence.strip()) >= 1:
-                        temp_file = self.work_dir / f'segment_{chunk_index}_{i}_{session_id}.mp3'
-                        await self.generate_speech(sentence, voice, str(temp_file))
-                        chunk_files.append(str(temp_file))
-                        
-            else:  # mixed
-                segments = text_processor.split_mixed_text(chunk)
-                for i, (segment, lang) in enumerate(segments):
-                    min_len = 1 if lang == 'zh' else MIN_SEGMENT_LENGTH
-                    if len(segment.strip()) >= min_len:
-                        voice = VOICES[voice_gender][lang]
-                        temp_file = self.work_dir / f'segment_{chunk_index}_{i}_{session_id}.mp3'
-                        await self.generate_speech(segment, voice, str(temp_file))
-                        chunk_files.append(str(temp_file))
+            for i, line in enumerate(lines):
+                if not line.strip():
+                    continue
+                    
+                text_type = text_processor.detect_text_type(line)
+                
+                if text_type == 'en':
+                    sentences = text_processor.split_english_sentences(line)
+                    voice = VOICES[voice_gender]['en']
+                    for j, sentence in enumerate(sentences):
+                        if len(sentence.strip()) >= MIN_SEGMENT_LENGTH or sentence.strip().isdigit():
+                            temp_file = self.work_dir / f'segment_{chunk_index}_{i}_{j}_{session_id}.mp3'
+                            await self.generate_speech(sentence, voice, str(temp_file))
+                            chunk_files.append(str(temp_file))
+                            
+                elif text_type == 'zh':
+                    sentences = text_processor.split_chinese_text(line)
+                    voice = VOICES[voice_gender]['zh']
+                    for j, sentence in enumerate(sentences):
+                        if len(sentence.strip()) >= 1:
+                            temp_file = self.work_dir / f'segment_{chunk_index}_{i}_{j}_{session_id}.mp3'
+                            await self.generate_speech(sentence, voice, str(temp_file))
+                            chunk_files.append(str(temp_file))
+                            
+                else:  # mixed
+                    segments = text_processor.split_mixed_text(line)
+                    for j, (segment, lang) in enumerate(segments):
+                        min_len = 1 if lang == 'zh' else MIN_SEGMENT_LENGTH
+                        if len(segment.strip()) >= min_len or segment.strip().isdigit():
+                            voice = VOICES[voice_gender][lang]
+                            temp_file = self.work_dir / f'segment_{chunk_index}_{i}_{j}_{session_id}.mp3'
+                            await self.generate_speech(segment, voice, str(temp_file))
+                            chunk_files.append(str(temp_file))
             
             return chunk_files
             
         except Exception as e:
             logger.error(f"Error processing chunk: {str(e)}")
             raise
-

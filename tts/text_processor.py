@@ -5,13 +5,29 @@ Handles text segmentation and language detection.
 """
 import re
 from typing import List, Tuple
-from config import MAX_SEGMENT_LENGTH, MIN_SEGMENT_LENGTH  # Changed from relative import
+from config import MAX_SEGMENT_LENGTH, MIN_SEGMENT_LENGTH
 
 class TextProcessor:
+    @staticmethod
+    def preprocess_text(text: str) -> List[str]:
+        """
+        Preprocess text by splitting into individual lines and filtering empty lines.
+        
+        Args:
+            text: Input text, potentially with multiple lines
+            
+        Returns:
+            List of non-empty text lines
+        """
+        # Split text into lines and filter out empty lines
+        lines = [line.strip() for line in text.split('\n')]
+        return [line for line in lines if line]
+
     @staticmethod
     def detect_text_type(text: str) -> str:
         """
         Detect text type: pure Chinese, pure English, or mixed.
+        Numbers are treated as English text.
         
         Args:
             text: Input text to analyze
@@ -20,7 +36,8 @@ class TextProcessor:
             str: 'zh', 'en', or 'mixed'
         """
         has_chinese = bool(re.search(r'[\u4e00-\u9fff]', text))
-        has_english = bool(re.search(r'[a-zA-Z]', text))
+        # Include numbers in English pattern
+        has_english = bool(re.search(r'[a-zA-Z0-9]', text))
         
         if has_chinese and has_english:
             return 'mixed'
@@ -32,6 +49,7 @@ class TextProcessor:
     def split_english_sentences(text: str) -> List[str]:
         """
         Split English text into natural speech segments.
+        Modified to treat single numbers as valid segments.
         
         Args:
             text: English text to split
@@ -41,6 +59,10 @@ class TextProcessor:
         """
         if not text.strip():
             return []
+
+        # Special case for single numbers or very short text
+        if text.strip().isdigit() or len(text.strip()) < MIN_SEGMENT_LENGTH:
+            return [text.strip()]
 
         sentences = []
         current_sentence = []
@@ -53,20 +75,23 @@ class TextProcessor:
                 word.endswith((',', ';', ':')) or 
                 len(' '.join(current_sentence)) >= MAX_SEGMENT_LENGTH):
                 
+                # Only check for abbreviations if the word ends with a period
                 if (word.endswith('.') and 
-                    (word[:-1].isdigit() or 
-                     all(c.isupper() for c in word[:-1]) or 
+                    not word[:-1].isdigit() and  # Allow numbers with periods
+                    (all(c.isupper() for c in word[:-1]) or 
                      len(word) <= 3)):
                     continue
                 
                 sentence = ' '.join(current_sentence).strip()
-                if len(sentence) >= MIN_SEGMENT_LENGTH:
+                # Allow numbers regardless of length
+                if len(sentence) >= MIN_SEGMENT_LENGTH or sentence.isdigit():
                     sentences.append(sentence)
                 current_sentence = []
 
         if current_sentence:
             sentence = ' '.join(current_sentence).strip()
-            if len(sentence) >= MIN_SEGMENT_LENGTH:
+            # Allow numbers regardless of length
+            if len(sentence) >= MIN_SEGMENT_LENGTH or sentence.isdigit():
                 sentences.append(sentence)
 
         return sentences
@@ -149,7 +174,7 @@ class TextProcessor:
             if buffer:
                 text = ''.join(buffer).strip()
                 if text:
-                    if current_type == 'en' and len(text) >= MIN_SEGMENT_LENGTH:
+                    if current_type == 'en' and (len(text) >= MIN_SEGMENT_LENGTH or text.isdigit()):
                         segments.append((text, 'en'))
                     elif current_type == 'zh' and len(text) >= 1:
                         segments.append((text, 'zh'))
@@ -173,4 +198,3 @@ class TextProcessor:
 
         flush_buffer()
         return segments
-
